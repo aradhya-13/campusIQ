@@ -1,0 +1,13 @@
+{
+  "name": "document-chat",
+  "version": "1.0.0",
+  "description": "Chat with your documents using Gemini AI",
+  "main": "electron.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}

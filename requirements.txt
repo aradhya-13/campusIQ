@@ -1,0 +1,10 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+google-genai>=1.0
+chromadb>=0.5
+pypdf>=4.0
+python-dotenv>=1.0
+beautifulsoup4>=4.12
+youtube-transcript-api>=0.6
+python-pptx>=0.6
