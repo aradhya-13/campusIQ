@@ -91,9 +91,30 @@ def _ingest_youtube(video_id: str, url: str) -> dict:
     return {"name": name, "chunks": chunks, "type": "youtube", "url": url}
 
 
+def _check_ssrf(url: str):
+    """Block private/local addresses and non-http(s) schemes to prevent SSRF."""
+    import ipaddress, socket
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Only http and https URLs are allowed, got: {parsed.scheme}")
+    hostname = parsed.hostname or ""
+    # Block localhost names
+    if hostname.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        raise ValueError("Requests to localhost are not allowed.")
+    # Resolve hostname and check if it falls in a private range
+    try:
+        ip = ipaddress.ip_address(socket.gethostbyname(hostname))
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise ValueError("Requests to private or reserved IP ranges are not allowed.")
+    except (socket.gaierror, ValueError) as e:
+        raise ValueError(f"Could not validate URL host: {e}")
+
+
 def _ingest_webpage(url: str) -> dict:
     import urllib.request
     from bs4 import BeautifulSoup
+    _check_ssrf(url)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         html = resp.read()
@@ -119,8 +140,12 @@ def _ingest_webpage(url: str) -> dict:
 @app.post("/api/ingest-url")
 def ingest_url(req: IngestURLRequest):
     url = req.url.strip()
-    # Detect YouTube
     import re
+    # SSRF check before any network activity
+    try:
+        _check_ssrf(url)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     yt_patterns = [
         r"(?:youtube\.com/watch\?.*v=|youtu\.be/)([A-Za-z0-9_-]{11})",
     ]
