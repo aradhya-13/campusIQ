@@ -91,45 +91,101 @@ def _ingest_youtube(video_id: str, url: str) -> dict:
     return {"name": name, "chunks": chunks, "type": "youtube", "url": url}
 
 
-def _check_ssrf(url: str):
-    """Block private/local addresses and non-http(s) schemes to prevent SSRF."""
-    import ipaddress, socket
+def _is_safe_ip(ip_str: str) -> bool:
+    """Return False if the IP is private, loopback, link-local, reserved or multicast."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+    except ValueError:
+        return False
+
+
+def _check_ssrf(url: str) -> None:
+    """
+    Raise ValueError if the URL is unsafe to fetch:
+    - Non-http/https scheme
+    - Hostname resolves to any private / loopback / link-local IP
+      (checks ALL addresses returned by getaddrinfo, not just the first)
+    """
+    import socket
     from urllib.parse import urlparse
+
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"Only http and https URLs are allowed, got: {parsed.scheme}")
+        raise ValueError(f"Only http and https URLs are allowed (got '{parsed.scheme}').")
+
     hostname = parsed.hostname or ""
-    # Block localhost names
-    if hostname.lower() in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-        raise ValueError("Requests to localhost are not allowed.")
-    # Resolve hostname and check if it falls in a private range
+    if not hostname:
+        raise ValueError("URL has no hostname.")
+
     try:
-        ip = ipaddress.ip_address(socket.gethostbyname(hostname))
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError("Requests to private or reserved IP ranges are not allowed.")
-    except (socket.gaierror, ValueError) as e:
-        raise ValueError(f"Could not validate URL host: {e}")
+        # getaddrinfo returns every address the name resolves to (IPv4 + IPv6)
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise ValueError(f"Could not resolve hostname '{hostname}': {e}")
+
+    for _, _, _, _, sockaddr in results:
+        ip_str = sockaddr[0]
+        if not _is_safe_ip(ip_str):
+            raise ValueError(
+                f"Hostname '{hostname}' resolves to a private or reserved address ({ip_str})."
+            )
+
+
+def _fetch_no_ssrf(url: str, max_redirects: int = 5) -> bytes:
+    """
+    Fetch a URL while checking every redirect target against the SSRF rules.
+    urllib follows redirects automatically, so we implement our own loop
+    using HEAD-then-GET to intercept each hop.
+    """
+    import urllib.request
+    import urllib.error
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise urllib.error.HTTPError(newurl, code, msg, headers, fp)
+
+    opener = urllib.request.build_opener(_NoRedirect())
+    current = url
+    for hop in range(max_redirects + 1):
+        _check_ssrf(current)                      # validate every hop
+        req = urllib.request.Request(
+            current, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        try:
+            with opener.open(req, timeout=15) as resp:
+                return resp.read()                # success — return body
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308):
+                location = e.headers.get("Location", "")
+                if not location:
+                    raise ValueError("Redirect with no Location header.")
+                # Resolve relative redirects
+                from urllib.parse import urljoin
+                current = urljoin(current, location)
+            else:
+                raise
+    raise ValueError(f"Too many redirects (>{max_redirects}).")
 
 
 def _ingest_webpage(url: str) -> dict:
-    import urllib.request
     from bs4 import BeautifulSoup
-    _check_ssrf(url)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        html = resp.read()
+    from urllib.parse import urlparse
+
+    # _fetch_no_ssrf checks the URL and every redirect hop before fetching
+    html = _fetch_no_ssrf(url)
+
     soup = BeautifulSoup(html, "html.parser")
-    # Remove nav, footer, script, style noise
     for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
         tag.decompose()
     text = soup.get_text(separator="\n", strip=True)
-    # Collapse blank lines
     lines = [l for l in text.splitlines() if l.strip()]
     text = "\n".join(lines)
     if len(text) < 100:
         raise ValueError("Page has too little readable text.")
-    # Use domain + path as name
-    from urllib.parse import urlparse
+
     parsed = urlparse(url)
     slug = (parsed.netloc + parsed.path).strip("/").replace("/", "_")[:60]
     name = f"web_{slug}.txt"
@@ -137,11 +193,13 @@ def _ingest_webpage(url: str) -> dict:
     return {"name": name, "chunks": chunks, "type": "webpage", "url": url}
 
 
+
 @app.post("/api/ingest-url")
 def ingest_url(req: IngestURLRequest):
     url = req.url.strip()
     import re
-    # SSRF check before any network activity
+    # Scheme + hostname check before any network activity
+    # (full per-hop SSRF check happens inside _fetch_no_ssrf for webpages)
     try:
         _check_ssrf(url)
     except ValueError as e:
