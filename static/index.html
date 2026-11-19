@@ -187,7 +187,6 @@ aside::-webkit-scrollbar-thumb { background: #d4d4e0; border-radius: 10px; }
   cursor:pointer; transition:background .15s;
 }
 .settings-save:hover { background:var(--cta-hover); }
-
 /* ══ MAIN ══ */
 main {
   flex:1; display:flex; flex-direction:column;
@@ -514,6 +513,7 @@ textarea::placeholder { color:var(--ink-3); }
     <div class="card-label">API Key</div>
     <div class="settings-row">
       <input class="settings-input" id="apiKeyInput" type="password" placeholder="Gemini API key…">
+      <input class="settings-input" id="adminPwInput" type="password" placeholder="Admin password (if required)…">
       <button class="settings-save" id="saveKeyBtn">Save</button>
     </div>
     <div class="status" id="keyStatus"></div>
@@ -1085,17 +1085,21 @@ const savedKey = localStorage.getItem("dc_api_key");
 if (savedKey) $("apiKeyInput").value = savedKey;
 $("saveKeyBtn").onclick = async () => {
   const key = $("apiKeyInput").value.trim();
+  const pw  = ($("adminPwInput") ? $("adminPwInput").value.trim() : "");
   if (!key) return;
   try {
     const res = await fetch("/api/set-key", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key })
+      body: JSON.stringify({ key, admin_password: pw })
     });
     if (res.ok) {
       localStorage.setItem("dc_api_key", key);
       $("keyStatus").textContent = "Saved ✓"; $("keyStatus").className = "status";
       toast("API key saved ✓");
-    } else { $("keyStatus").textContent = "Failed to save."; $("keyStatus").className = "status err"; }
+    } else {
+      const e = await res.json();
+      $("keyStatus").textContent = e.detail || "Failed."; $("keyStatus").className = "status err";
+    }
   } catch { $("keyStatus").textContent = "Saved locally."; $("keyStatus").className = "status"; localStorage.setItem("dc_api_key", key); toast("Key saved locally ✓"); }
 };
 

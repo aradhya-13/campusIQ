@@ -17,6 +17,7 @@ Answer in a warm, natural tone — like a knowledgeable friend explaining someth
 - Never include citation markers like [1] or [2] in your answer.
 - Keep answers concise and clear. Two to four sentences is usually enough.
 - If the documents don't contain the answer, just say so simply and naturally.
+- Base your answer only on the provided excerpts. This reduces the chance of incorrect information, but always verify important facts from the original source.
 - Never make up information or use knowledge outside the provided excerpts."""
 
 

@@ -30,8 +30,6 @@ class SummariseRequest(BaseModel):
     history: list[Message] = []
 
 
-class SetKeyRequest(BaseModel):
-    key: str
 
 
 class IngestURLRequest(BaseModel):
@@ -146,10 +144,19 @@ def ingest_url(req: IngestURLRequest):
 
 # ── API key ──────────────────────────────────────────────────────────────────
 
+class SetKeyRequest(BaseModel):
+    key: str
+    admin_password: str = ""
+
+
 @app.post("/api/set-key")
 def set_key(req: SetKeyRequest):
     import app.config as cfg
     import app.rag as rag_module
+    # On Railway (or any deployment where ADMIN_PASSWORD is set), require it.
+    expected = os.environ.get("ADMIN_PASSWORD", "")
+    if expected and req.admin_password != expected:
+        raise HTTPException(status_code=403, detail="Incorrect admin password.")
     cfg.GEMINI_API_KEY = req.key.strip()
     rag_module.GEMINI_API_KEY = req.key.strip()
     rag_module._gemini_client = None
